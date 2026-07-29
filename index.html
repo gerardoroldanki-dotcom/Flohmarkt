@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Flohmarkt-Radar</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+        #map { height: 100vh; width: 100%; }
+        #controls {
+            position: fixed;
+            top: 16px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 1000;
+            background: white;
+            padding: 12px 20px;
+            border-radius: 12px;
+            box-shadow: 0 2px 12px rgba(0,0,0,0.15);
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            flex-wrap: wrap;
+            justify-content: center;
+            max-width: 90vw;
+        }
+        #controls input {
+            padding: 8px 12px;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            font-size: 14px;
+            outline: none;
+            max-width: 160px;
+        }
+        #controls input:focus { border-color: #e67e22; }
+        #controls button {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 8px;
+            font-size: 14px;
+            cursor: pointer;
+            background: #e67e22;
+            color: white;
+            font-weight: 600;
+            transition: background 0.2s;
+        }
+        #controls button:hover { background: #d35400; }
+        #controls button.active { background: #d35400; box-shadow: inset 0 2px 4px rgba(0,0,0,0.2); }
+        #controls button.secondary { background: #3498db; }
+        #controls button.secondary:hover { background: #2980b9; }
+        #stats {
+            font-size: 13px;
+            color: #666;
+            padding: 4px 8px;
+            background: #f8f9fa;
+            border-radius: 6px;
+        }
+        .leaflet-popup-content {
+            min-width: 200px;
+        }
+        .leaflet-popup-content h3 {
+            font-size: 15px;
+            margin-bottom: 6px;
+            color: #2c3e50;
+        }
+        .leaflet-popup-content .info {
+            font-size: 13px;
+            color: #555;
+            line-height: 1.5;
+        }
+        .leaflet-popup-content .info span {
+            display: block;
+        }
+        .leaflet-popup-content .link {
+            display: inline-block;
+            margin-top: 6px;
+            color: #e67e22;
+            text-decoration: none;
+            font-weight: 600;
+            font-size: 13px;
+        }
+        @media (max-width: 600px) {
+            #controls { padding: 10px; gap: 6px; }
+            #controls input { max-width: 120px; font-size: 12px; }
+            #controls button { font-size: 12px; padding: 6px 10px; }
+        }
+    </style>
+</head>
+<body>
+    <div id="controls">
+        <input type="text" id="plzInput" placeholder="PLZ (z.B. 80331)" maxlength="5">
+        <input type="text" id="cityInput" placeholder="Stadt (z.B. München)">
+        <button id="btnToday" class="secondary">Heute</button>
+        <button id="btnWeekend" class="secondary">Dieses Wochenende</button>
+        <button id="btnAll" class="active">Alle</button>
+        <span id="stats">0 Märkte</span>
+    </div>
+    <div id="map"></div>
+
+    <script>
+        const map = L.map('map').setView([51.1657, 10.4515], 6);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '&copy; OpenStreetMap contributors',
+            maxZoom: 18
+        }).addTo(map);
+
+        let markers = L.layerGroup().addTo(map);
+        let currentFilter = 'today';
+
+        function getGermanDayName(date) {
+            const days = ['Sonntag', 'Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag'];
+            return days[date.getDay()];
+        }
+
+        function formatDate(dateStr) {
+            if (!dateStr) return '';
+            const parts = dateStr.split('-');
+            return `${parts[2]}.${parts[1]}.${parts[0]}`;
+        }
+
+        function isThisWeekend(dateStr) {
+            if (!dateStr) return false;
+            const parts = dateStr.split('-');
+            const d = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
+            const now = new Date();
+            const day = d.getDay();
+            const today = now.getDay();
+            const diffDays = Math.floor((d - now) / (1000 * 60 * 60 * 24));
+            if (today <= 5) {
+                const nextSat = 6 - today;
+                const nextSun = 7 - today;
+                return diffDays === nextSat || diffDays === nextSun;
+            }
+            return diffDays === 0 || diffDays === 1;
+        }
+
+        function isToday(dateStr) {
+            if (!dateStr) return false;
+            const parts = dateStr.split('-');
+            const d = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
+            const now = new Date();
+            return d.getDate() === now.getDate() &&
+                d.getMonth() === now.getMonth() &&
+                d.getFullYear() === now.getFullYear();
+        }
+
+        async function loadFlohmaerkte(filter, plz, city) {
+            let url = '/api/flohmaerkte?';
+            const params = [];
+            if (filter === 'today') params.push('today=true');
+            if (plz) params.push('plz=' + plz);
+            if (city) params.push('city=' + encodeURIComponent(city));
+            url += params.join('&');
+
+            const resp = await fetch(url);
+            const data = await resp.json();
+            updateMap(data);
+        }
+
+        function updateMap(geoJson) {
+            markers.clearLayers();
+            document.getElementById('stats').textContent = `${geoJson.features.length} Märkte`;
+
+            geoJson.features.forEach(f => {
+                const p = f.properties;
+                const coord = f.geometry.coordinates;
+                const popup = `
+                    <div>
+                        <h3>${p.name}</h3>
+                        <div class="info">
+                            <span>📍 ${p.plz ? p.plz + ' ' : ''}${p.city || ''}</span>
+                            <span>🗺️ ${p.bundesland || ''}</span>
+                            ${p.date_start ? `<span>📅 ${getGermanDayName(new Date(p.date_start))}, ${formatDate(p.date_start)}</span>` : ''}
+                            ${p.time_start ? `<span>🕐 ${p.time_start} - ${p.time_end || '?'} Uhr</span>` : ''}
+                        </div>
+                        ${p.url ? `<a class="link" href="${p.url}" target="_blank">Details →</a>` : ''}
+                    </div>
+                `;
+                const marker = L.marker([coord[1], coord[0]])
+                    .bindPopup(popup);
+                markers.addLayer(marker);
+            });
+
+            if (geoJson.features.length > 0) {
+                const bounds = markers.getBounds();
+                if (bounds.isValid()) {
+                    map.fitBounds(bounds, { padding: [50, 50] });
+                }
+            }
+        }
+
+        function setActiveButton(id) {
+            document.querySelectorAll('#controls button').forEach(b => b.className = 'secondary');
+            document.getElementById(id).className = 'active';
+        }
+
+        document.getElementById('btnToday').addEventListener('click', () => {
+            currentFilter = 'today';
+            setActiveButton('btnToday');
+            loadFlohmaerkte('today', document.getElementById('plzInput').value, document.getElementById('cityInput').value);
+        });
+
+        document.getElementById('btnWeekend').addEventListener('click', () => {
+            currentFilter = 'weekend';
+            setActiveButton('btnWeekend');
+            loadAllEvents().then(events => {
+                const weekendEvents = events.filter(e => isThisWeekend(e.properties.date_start));
+                updateMap({ type: 'FeatureCollection', features: weekendEvents });
+            });
+        });
+
+        document.getElementById('btnAll').addEventListener('click', () => {
+            currentFilter = 'all';
+            setActiveButton('btnAll');
+            loadFlohmaerkte('all', document.getElementById('plzInput').value, document.getElementById('cityInput').value);
+        });
+
+        async function loadAllEvents() {
+            const resp = await fetch('/api/flohmaerkte');
+            const data = await resp.json();
+            return data.features;
+        }
+
+        document.getElementById('plzInput').addEventListener('input', () => {
+            loadFlohmaerkte(currentFilter, document.getElementById('plzInput').value, document.getElementById('cityInput').value);
+        });
+        document.getElementById('cityInput').addEventListener('input', () => {
+            loadFlohmaerkte(currentFilter, document.getElementById('plzInput').value, document.getElementById('cityInput').value);
+        });
+
+        loadFlohmaerkte('all', '', '');
+    </script>
+</body>
+</html>

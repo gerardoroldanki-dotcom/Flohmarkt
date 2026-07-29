@@ -1,0 +1,9 @@
+flohmarkt.db
+__pycache__/
+*.pyc
+.DS_Store
+run_full*.py
+scraper2.py
+check_*.py
+test_*.py
+analyze_*.py
